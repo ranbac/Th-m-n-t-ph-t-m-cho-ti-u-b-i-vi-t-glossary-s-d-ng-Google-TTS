@@ -1,0 +1,187 @@
+/**
+ * =================================================================================
+ * PHIÊN BẢN HOÀN CHỈNH: BẢO MẬT, CÓ CACHE & TƯƠNG THÍCH IOS
+ * =================================================================================
+ * Chức năng: Thêm nút phát âm cho tiêu đề bài viết 'glossary' sử dụng Google TTS.
+ * API Key được xử lý an toàn ở phía server.
+ * File âm thanh được cache lại để tiết kiệm chi phí và tăng tốc độ.
+ */
+
+// -----------------------------------------------------------------------------
+// PHẦN 1: THÊM NÚT BẤM VÀO NỘI DUNG BÀI VIẾT
+// -----------------------------------------------------------------------------
+function them_nut_doc_tieu_de_glossary_v2($content) {
+    // Chỉ hoạt động trên trang chi tiết của post type 'glossary'
+    if ( is_singular('glossary') ) {
+        $tieu_de = get_the_title();
+        // Nút bấm giờ đây sẽ chứa Post ID để gửi đi qua AJAX
+        $nut_bam_html = '
+            <p>
+                <strong>Phát âm</strong> 
+                <button id="google-tts-button" 
+                        data-post-id="' . get_the_ID() . '" 
+                        style="cursor: pointer; border: none; background: none; font-size: 1.5em; vertical-align: middle; padding: 0;">
+                        🔊
+                </button>
+                <span id="google-tts-status" style="font-size: 0.8em; margin-left: 8px;"></span>
+            </p>
+            <hr>';
+        return $nut_bam_html . $content;
+    }
+    return $content;
+}
+add_filter('the_content', 'them_nut_doc_tieu_de_glossary_v2');
+
+
+// -----------------------------------------------------------------------------
+// PHẦN 2: THÊM JAVASCRIPT VÀ TRUYỀN DỮ LIỆU AN TOÀN TỪ PHP -> JS
+// -----------------------------------------------------------------------------
+function them_script_cho_nut_doc_tieu_de_v2() {
+    if ( is_singular('glossary') ) {
+        // Đăng ký file script (tạm thời viết inline bên dưới)
+        wp_register_script('google-tts-script', false);
+        wp_enqueue_script('google-tts-script');
+
+        // Truyền dữ liệu từ PHP sang JavaScript một cách an toàn
+        // Bao gồm URL để gọi AJAX và một nonce để bảo mật
+        wp_localize_script('google-tts-script', 'tts_ajax_object', [
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'nonce'    => wp_create_nonce('google_tts_nonce')
+        ]);
+
+        ?>
+        <script type="text/javascript" id="google-tts-script-inline">
+            document.addEventListener('DOMContentLoaded', function() {
+                const playButton = document.getElementById('google-tts-button');
+                const statusLabel = document.getElementById('google-tts-status');
+                const audioPlayer = new Audio();
+
+                if (playButton) {
+                    playButton.addEventListener('click', async function() {
+                        const postId = this.getAttribute('data-post-id');
+                        
+                        // Mở khóa audio context cho iOS
+                        audioPlayer.play().catch(e => {});
+
+                        statusLabel.textContent = 'Đang tải...';
+                        playButton.disabled = true;
+
+                        const formData = new FormData();
+                        formData.append('action', 'get_google_tts_audio'); // Tên action hook
+                        formData.append('post_id', postId);
+                        formData.append('nonce', tts_ajax_object.nonce); // Gửi nonce bảo mật
+
+                        try {
+                            const response = await fetch(tts_ajax_object.ajax_url, {
+                                method: 'POST',
+                                body: formData
+                            });
+                            
+                            const data = await response.json();
+
+                            if (data.success) {
+                                audioPlayer.src = data.data.audioUrl;
+                                audioPlayer.play();
+                                statusLabel.textContent = '';
+                            } else {
+                                throw new Error(data.data.message || 'Có lỗi xảy ra.');
+                            }
+
+                        } catch (error) {
+                            console.error('Lỗi khi xử lý TTS:', error);
+                            statusLabel.textContent = error.message;
+                        } finally {
+                            playButton.disabled = false;
+                        }
+                    });
+                }
+            });
+        </script>
+        <?php
+    }
+}
+add_action('wp_footer', 'them_script_cho_nut_doc_tieu_de_v2');
+
+
+// -----------------------------------------------------------------------------
+// PHẦN 3: XỬ LÝ YÊU CẦU AJAX Ở PHÍA SERVER
+// -----------------------------------------------------------------------------
+function xu_ly_tts_ajax_v2() {
+    // 1. Kiểm tra nonce bảo mật
+    if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'google_tts_nonce')) {
+        wp_send_json_error(['message' => 'Yêu cầu không hợp lệ!'], 403);
+        return;
+    }
+
+    // 2. Lấy post ID và tiêu đề
+    if (!isset($_POST['post_id']) || !($post_id = intval($_POST['post_id']))) {
+        wp_send_json_error(['message' => 'Thiếu Post ID.'], 400);
+        return;
+    }
+    $text_to_read = get_the_title($post_id);
+    if (empty($text_to_read)) {
+        wp_send_json_error(['message' => 'Không tìm thấy tiêu đề.'], 404);
+        return;
+    }
+
+    // 3. Thiết lập hệ thống Cache
+    $upload_dir = wp_upload_dir();
+    $cache_dir_path = $upload_dir['basedir'] . '/google-tts-cache';
+    $cache_dir_url = $upload_dir['baseurl'] . '/google-tts-cache';
+    
+    // Tạo thư mục cache nếu chưa tồn tại
+    if (!file_exists($cache_dir_path)) {
+        wp_mkdir_p($cache_dir_path);
+    }
+
+    $file_name = md5($text_to_read) . '.mp3';
+    $file_path = $cache_dir_path . '/' . $file_name;
+    $file_url = $cache_dir_url . '/' . $file_name;
+
+    // 4. KIỂM TRA CACHE: Nếu file đã tồn tại, trả về luôn
+    if (file_exists($file_path)) {
+        wp_send_json_success(['audioUrl' => $file_url]);
+        return;
+    }
+
+    // 5. GỌI API GOOGLE: Nếu file chưa có trong cache
+    // !!! QUAN TRỌNG: Hãy thay API Key của bạn vào đây.
+    // Để bảo mật hơn nữa, bạn nên định nghĩa key này trong file wp-config.php
+    $api_key = 'AIzaSyAbkWfXQvw3B6xJR9h_AI3FVo0MbiWmxRo'; 
+    $api_url = 'https://texttospeech.googleapis.com/v1/text:synthesize?key=' . $api_key;
+    
+    $request_body = [
+        'input' => ['text' => $text_to_read],
+        'voice' => ['languageCode' => 'cmn-CN', 'name' => 'cmn-CN-Standard-A'],
+        'audioConfig' => ['audioEncoding' => 'MP3', 'speakingRate' => 0.8]
+    ];
+    
+    $response = wp_remote_post($api_url, [
+        'headers' => ['Content-Type' => 'application/json; charset=utf-8'],
+        'body' => json_encode($request_body),
+        'method' => 'POST',
+        'data_format' => 'body',
+        'timeout' => 15,
+    ]);
+
+    if (is_wp_error($response)) {
+        wp_send_json_error(['message' => 'Lỗi kết nối đến Google API.'], 500);
+        return;
+    }
+
+    $response_body = json_decode(wp_remote_retrieve_body($response), true);
+
+    if (isset($response_body['audioContent'])) {
+        // 6. LƯU VÀO CACHE VÀ TRẢ VỀ KẾT QUẢ
+        $audio_content = base64_decode($response_body['audioContent']);
+        file_put_contents($file_path, $audio_content);
+        wp_send_json_success(['audioUrl' => $file_url]);
+    } else {
+        $error_message = isset($response_body['error']['message']) ? $response_body['error']['message'] : 'Lỗi không xác định từ Google API.';
+        wp_send_json_error(['message' => $error_message], 500);
+    }
+}
+// Hook action cho cả người dùng đã đăng nhập và chưa đăng nhập
+add_action('wp_ajax_get_google_tts_audio', 'xu_ly_tts_ajax_v2');
+add_action('wp_ajax_nopriv_get_google_tts_audio', 'xu_ly_tts_ajax_v2');
+
