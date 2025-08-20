@@ -1,17 +1,18 @@
 <?php
 /**
  * =================================================================================
- * PHIÊN BẢN CUỐI CÙNG: GIAO DIỆN ADMIN, BẢO MẬT, CACHE & TƯƠNG THÍCH IOS
+ * PHIÊN BẢN HOÀN CHỈNH: GIAO DIỆN ADMIN, BẢO MẬT, CACHE & TƯƠNG THÍCH IOS
  * =================================================================================
  * Chức năng: Thêm nút phát âm cho 'glossary' và trang cài đặt để quản lý API Key.
  * API Key được lưu vào database một cách an toàn.
  * File âm thanh được cache lại để tiết kiệm chi phí và tăng tốc độ.
+ * Đã sửa lỗi âm thanh bị giật/lặp khi bấm nút nhiều lần.
  */
 
 // -----------------------------------------------------------------------------
-// PHẦN 1: THÊM NÚT BẤM VÀO NỘI DUNG BÀI VIẾT (Không thay đổi)
+// PHẦN 1: THÊM NÚT BẤM VÀO NỘI DUNG BÀI VIẾT
 // -----------------------------------------------------------------------------
-function them_nut_doc_tieu_de_glossary_v3($content) {
+function them_nut_doc_tieu_de_glossary_final($content) {
     if ( is_singular('glossary') ) {
         $nut_bam_html = '
             <p>
@@ -28,12 +29,12 @@ function them_nut_doc_tieu_de_glossary_v3($content) {
     }
     return $content;
 }
-add_filter('the_content', 'them_nut_doc_tieu_de_glossary_v3');
+add_filter('the_content', 'them_nut_doc_tieu_de_glossary_final');
 
 // -----------------------------------------------------------------------------
-// PHẦN 2: THÊM JAVASCRIPT VÀO FOOTER (Không thay đổi)
+// PHẦN 2: THÊM JAVASCRIPT VÀO FOOTER (ĐÃ SỬA LỖI ÂM THANH)
 // -----------------------------------------------------------------------------
-function them_script_cho_nut_doc_tieu_de_v3() {
+function them_script_cho_nut_doc_tieu_de_final() {
     if ( is_singular('glossary') ) {
         wp_register_script('google-tts-script', false);
         wp_enqueue_script('google-tts-script');
@@ -43,55 +44,71 @@ function them_script_cho_nut_doc_tieu_de_v3() {
         ]);
         ?>
         <script type="text/javascript" id="google-tts-script-inline">
-            document.addEventListener('DOMContentLoaded', function() {
-                const playButton = document.getElementById('google-tts-button');
-                const statusLabel = document.getElementById('google-tts-status');
-                const audioPlayer = new Audio();
+        document.addEventListener('DOMContentLoaded', function() {
+            const playButton = document.getElementById('google-tts-button');
+            const statusLabel = document.getElementById('google-tts-status');
+            
+            const audioPlayer = new Audio();
+            let isAudioReady = false; // Thêm một biến để theo dõi trạng thái
 
-                if (playButton) {
-                    playButton.addEventListener('click', async function() {
-                        const postId = this.getAttribute('data-post-id');
-                        audioPlayer.play().catch(e => {});
-                        statusLabel.textContent = 'Đang tải...';
-                        playButton.disabled = true;
+            if (playButton) {
+                playButton.addEventListener('click', async function() {
 
-                        const formData = new FormData();
-                        formData.append('action', 'get_google_tts_audio');
-                        formData.append('post_id', postId);
-                        formData.append('nonce', tts_ajax_object.nonce);
+                    // 1. Nếu âm thanh đã sẵn sàng, chỉ cần phát lại
+                    if (isAudioReady) {
+                        audioPlayer.currentTime = 0; // Tua về giây 0
+                        audioPlayer.play();
+                        return; // Dừng hàm tại đây
+                    }
 
-                        try {
-                            const response = await fetch(tts_ajax_object.ajax_url, {
-                                method: 'POST',
-                                body: formData
-                            });
-                            const data = await response.json();
-                            if (data.success) {
-                                audioPlayer.src = data.data.audioUrl;
-                                audioPlayer.play();
-                                statusLabel.textContent = '';
-                            } else {
-                                throw new Error(data.data.message || 'Có lỗi xảy ra.');
-                            }
-                        } catch (error) {
-                            console.error('Lỗi khi xử lý TTS:', error);
-                            statusLabel.textContent = error.message;
-                        } finally {
-                            playButton.disabled = false;
+                    // 2. Nếu chưa sẵn sàng, thực hiện quy trình tải lần đầu
+                    const postId = this.getAttribute('data-post-id');
+                    audioPlayer.play().catch(e => {}); // Tương thích iOS
+                    
+                    statusLabel.textContent = 'Đang tải...';
+                    playButton.disabled = true;
+
+                    const formData = new FormData();
+                    formData.append('action', 'get_google_tts_audio');
+                    formData.append('post_id', postId);
+                    formData.append('nonce', tts_ajax_object.nonce);
+
+                    try {
+                        const response = await fetch(tts_ajax_object.ajax_url, {
+                            method: 'POST',
+                            body: formData
+                        });
+                        const data = await response.json();
+                        if (data.success) {
+                            audioPlayer.src = data.data.audioUrl;
+                            audioPlayer.play();
+                            statusLabel.textContent = '';
+                            
+                            // 3. Đánh dấu là âm thanh đã sẵn sàng
+                            isAudioReady = true; 
+
+                        } else {
+                            throw new Error(data.data.message || 'Có lỗi xảy ra.');
                         }
-                    });
-                }
-            });
+                    } catch (error) {
+                        console.error('Lỗi khi xử lý TTS:', error);
+                        statusLabel.textContent = error.message;
+                    } finally {
+                        playButton.disabled = false;
+                    }
+                });
+            }
+        });
         </script>
         <?php
     }
 }
-add_action('wp_footer', 'them_script_cho_nut_doc_tieu_de_v3');
+add_action('wp_footer', 'them_script_cho_nut_doc_tieu_de_final');
 
 // -----------------------------------------------------------------------------
-// PHẦN 3: XỬ LÝ AJAX PHÍA SERVER (Cập nhật để lấy API Key từ database)
+// PHẦN 3: XỬ LÝ AJAX PHÍA SERVER
 // -----------------------------------------------------------------------------
-function xu_ly_tts_ajax_v3() {
+function xu_ly_tts_ajax_final() {
     if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'google_tts_nonce')) {
         wp_send_json_error(['message' => 'Yêu cầu không hợp lệ!'], 403);
         return;
@@ -101,8 +118,14 @@ function xu_ly_tts_ajax_v3() {
         wp_send_json_error(['message' => 'Thiếu Post ID.'], 400);
         return;
     }
+    
     $text_to_read = get_the_title($post_id);
+    if (empty($text_to_read)) {
+        wp_send_json_error(['message' => 'Không tìm thấy tiêu đề.'], 404);
+        return;
+    }
 
+    // --- Logic Cache ---
     $upload_dir = wp_upload_dir();
     $cache_dir_path = $upload_dir['basedir'] . '/google-tts-cache';
     $cache_dir_url = $upload_dir['baseurl'] . '/google-tts-cache';
@@ -118,7 +141,7 @@ function xu_ly_tts_ajax_v3() {
         return;
     }
 
-    // *** THAY ĐỔI QUAN TRỌNG: Lấy API Key từ option đã lưu trong database ***
+    // --- Logic gọi API Google ---
     $api_key = get_option('google_tts_api_key');
     if (empty($api_key)) {
         wp_send_json_error(['message' => 'Lỗi: API Key chưa được cấu hình.'], 500);
@@ -131,6 +154,7 @@ function xu_ly_tts_ajax_v3() {
         'voice' => ['languageCode' => 'cmn-CN', 'name' => 'cmn-CN-Standard-A'],
         'audioConfig' => ['audioEncoding' => 'MP3', 'speakingRate' => 0.8]
     ];
+    
     $response = wp_remote_post($api_url, [
         'headers' => ['Content-Type' => 'application/json; charset=utf-8'],
         'body' => json_encode($request_body),
@@ -143,8 +167,10 @@ function xu_ly_tts_ajax_v3() {
         return;
     }
 
+    $response_code = wp_remote_retrieve_response_code($response);
     $response_body = json_decode(wp_remote_retrieve_body($response), true);
-    if (isset($response_body['audioContent'])) {
+
+    if ($response_code === 200 && isset($response_body['audioContent'])) {
         $audio_content = base64_decode($response_body['audioContent']);
         file_put_contents($file_path, $audio_content);
         wp_send_json_success(['audioUrl' => $file_url]);
@@ -153,11 +179,11 @@ function xu_ly_tts_ajax_v3() {
         wp_send_json_error(['message' => $error_message], 500);
     }
 }
-add_action('wp_ajax_get_google_tts_audio', 'xu_ly_tts_ajax_v3');
-add_action('wp_ajax_nopriv_get_google_tts_audio', 'xu_ly_tts_ajax_v3');
+add_action('wp_ajax_get_google_tts_audio', 'xu_ly_tts_ajax_final');
+add_action('wp_ajax_nopriv_get_google_tts_audio', 'xu_ly_tts_ajax_final');
 
 // -----------------------------------------------------------------------------
-// PHẦN 4: TẠO GIAO DIỆN ADMIN ĐỂ NHẬP API KEY (Mới)
+// PHẦN 4: TẠO GIAO DIỆN ADMIN ĐỂ NHẬP API KEY
 // -----------------------------------------------------------------------------
 
 /**
@@ -165,11 +191,11 @@ add_action('wp_ajax_nopriv_get_google_tts_audio', 'xu_ly_tts_ajax_v3');
  */
 function google_tts_register_settings_page() {
     add_options_page(
-        'Google TTS Settings',          // Tiêu đề trang
-        'Google TTS Settings',          // Tên menu
-        'manage_options',               // Quyền truy cập
-        'google-tts-settings-slug',     // Slug của trang
-        'google_tts_settings_page_html' // Hàm để render HTML
+        'Google TTS Settings',             // Tiêu đề trang
+        'Google TTS Settings',             // Tên menu
+        'manage_options',                  // Quyền truy cập
+        'google-tts-settings-slug',        // Slug của trang
+        'google_tts_settings_page_html'    // Hàm để render HTML
     );
 }
 add_action('admin_menu', 'google_tts_register_settings_page');
@@ -187,11 +213,8 @@ function google_tts_settings_page_html() {
         <p>Nhập API Key của bạn cho dịch vụ Google Cloud Text-to-Speech.</p>
         <form action="options.php" method="post">
             <?php
-            // In ra các trường cài đặt đã đăng ký
             settings_fields('google_tts_settings_group');
-            // In ra các section của trang
             do_settings_sections('google-tts-settings-slug');
-            // Nút lưu
             submit_button('Lưu thay đổi');
             ?>
         </form>
@@ -203,28 +226,25 @@ function google_tts_settings_page_html() {
  * Đăng ký setting, section, và field
  */
 function google_tts_settings_init() {
-    // 1. Đăng ký một setting mới, lưu với tên 'google_tts_api_key'
     register_setting('google_tts_settings_group', 'google_tts_api_key', [
         'type' => 'string',
-        'sanitize_callback' => 'sanitize_text_field', // Làm sạch dữ liệu trước khi lưu
+        'sanitize_callback' => 'sanitize_text_field',
         'default' => ''
     ]);
 
-    // 2. Thêm một section (nhóm các trường)
     add_settings_section(
-        'google_tts_main_section',                // ID của section
-        'Cài đặt API Key',                        // Tiêu đề section
-        null,                                     // Hàm mô tả section (không cần)
-        'google-tts-settings-slug'                // Slug của trang
+        'google_tts_main_section',         
+        'Cài đặt API Key',                 
+        null,                              
+        'google-tts-settings-slug'         
     );
 
-    // 3. Thêm trường nhập API Key vào section trên
     add_settings_field(
-        'google_tts_api_key_field',               // ID của field
-        'Google TTS API Key',                     // Tên hiển thị của field
-        'google_tts_api_key_field_callback',      // Hàm để render input HTML
-        'google-tts-settings-slug',               // Slug của trang
-        'google_tts_main_section'                 // ID của section cha
+        'google_tts_api_key_field',        
+        'Google TTS API Key',              
+        'google_tts_api_key_field_callback', 
+        'google-tts-settings-slug',        
+        'google_tts_main_section'          
     );
 }
 add_action('admin_init', 'google_tts_settings_init');
