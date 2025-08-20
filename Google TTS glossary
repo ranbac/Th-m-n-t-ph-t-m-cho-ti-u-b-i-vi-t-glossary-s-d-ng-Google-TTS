@@ -1,12 +1,9 @@
-<?php
 /**
  * =================================================================================
- * PHIÊN BẢN HOÀN CHỈNH: GIAO DIỆN ADMIN, BẢO MẬT, CACHE & TƯƠNG THÍCH IOS
+ * PHIÊN BẢN HOÀN CHỈNH CUỐI CÙNG (v2)
  * =================================================================================
- * Chức năng: Thêm nút phát âm cho 'glossary' và trang cài đặt để quản lý API Key.
- * API Key được lưu vào database một cách an toàn.
- * File âm thanh được cache lại để tiết kiệm chi phí và tăng tốc độ.
- * Đã sửa lỗi âm thanh bị giật/lặp khi bấm nút nhiều lần.
+ * Chức năng: Thêm nút phát âm cho 'glossary' với giao diện admin, cache,
+ * tương thích iOS và đã sửa các lỗi về phát lại âm thanh.
  */
 
 // -----------------------------------------------------------------------------
@@ -32,7 +29,7 @@ function them_nut_doc_tieu_de_glossary_final($content) {
 add_filter('the_content', 'them_nut_doc_tieu_de_glossary_final');
 
 // -----------------------------------------------------------------------------
-// PHẦN 2: THÊM JAVASCRIPT VÀO FOOTER (ĐÃ SỬA LỖI ÂM THANH)
+// PHẦN 2: THÊM JAVASCRIPT VÀO FOOTER (ĐÃ SỬA LỖI CHẤT LƯỢNG ÂM THANH)
 // -----------------------------------------------------------------------------
 function them_script_cho_nut_doc_tieu_de_final() {
     if ( is_singular('glossary') ) {
@@ -49,19 +46,19 @@ function them_script_cho_nut_doc_tieu_de_final() {
             const statusLabel = document.getElementById('google-tts-status');
             
             const audioPlayer = new Audio();
-            let isAudioReady = false; // Thêm một biến để theo dõi trạng thái
+            let isAudioReady = false;
 
             if (playButton) {
                 playButton.addEventListener('click', async function() {
 
-                    // 1. Nếu âm thanh đã sẵn sàng, chỉ cần phát lại
                     if (isAudioReady) {
-                        audioPlayer.currentTime = 0; // Tua về giây 0
+                        // Dùng load() để reset bộ đệm audio của trình duyệt,
+                        // khắc phục lỗi âm thanh kém chất lượng khi phát lại.
+                        audioPlayer.load(); 
                         audioPlayer.play();
-                        return; // Dừng hàm tại đây
+                        return;
                     }
 
-                    // 2. Nếu chưa sẵn sàng, thực hiện quy trình tải lần đầu
                     const postId = this.getAttribute('data-post-id');
                     audioPlayer.play().catch(e => {}); // Tương thích iOS
                     
@@ -83,10 +80,7 @@ function them_script_cho_nut_doc_tieu_de_final() {
                             audioPlayer.src = data.data.audioUrl;
                             audioPlayer.play();
                             statusLabel.textContent = '';
-                            
-                            // 3. Đánh dấu là âm thanh đã sẵn sàng
                             isAudioReady = true; 
-
                         } else {
                             throw new Error(data.data.message || 'Có lỗi xảy ra.');
                         }
@@ -172,11 +166,14 @@ function xu_ly_tts_ajax_final() {
 
     if ($response_code === 200 && isset($response_body['audioContent'])) {
         $audio_content = base64_decode($response_body['audioContent']);
-        file_put_contents($file_path, $audio_content);
-        wp_send_json_success(['audioUrl' => $file_url]);
+        if (file_put_contents($file_path, $audio_content)) {
+            wp_send_json_success(['audioUrl' => $file_url]);
+        } else {
+            wp_send_json_error(['message' => 'Không thể ghi file vào thư mục cache.'], 500);
+        }
     } else {
         $error_message = $response_body['error']['message'] ?? 'Lỗi không xác định từ Google API.';
-        wp_send_json_error(['message' => $error_message], 500);
+        wp_send_json_error(['message' => 'Lỗi từ Google: ' . $error_message], 500);
     }
 }
 add_action('wp_ajax_get_google_tts_audio', 'xu_ly_tts_ajax_final');
@@ -266,4 +263,3 @@ function google_tts_api_key_field_callback() {
     <?php
 }
 
-?>
